@@ -7,21 +7,23 @@
  * - Shows current model being used
  * - Displays session duration (elapsed time)
  * - Shows activity status (Coding/Idle/Thinking)
+ * - Shows the current session/project name
  * - Button link to OpenCode.ai
  * 
  * Configuration via environment variables:
  * - OPENCODE_DISCORD_CLIENT_ID: Custom Discord Application ID
  * - OPENCODE_DISCORD_ENABLED: Set to "false" to disable
+ * - OPENCODE_DISCORD_SHOW_SESSION: Set to "false" to hide the session name
  */
 
 import type { Plugin, PluginInput, Hooks } from "@opencode-ai/plugin";
-import type { Event } from "@opencode-ai/sdk";
 import { DiscordRPCClient, type ActivityStatus } from "./discord.js";
 import { getConfig } from "./config.js";
 
 // Singleton RPC client instance
 let rpcClient: DiscordRPCClient | null = null;
 let currentModelName: string | null = null;
+let currentSessionName: string | null = null;
 let currentStatus: ActivityStatus = "idle";
 
 /**
@@ -60,14 +62,19 @@ function formatModelName(modelId: string | undefined): string {
 }
 
 /**
- * Update the Discord presence with current state
+ * Update the Discord presence with current state.
+ *
+ * NOTE: This is intentionally fire-and-forget. It must NEVER block opencode's
+ * hook pipeline, otherwise a slow/unresponsive Discord connection would hang
+ * tool execution. Errors are caught inside the RPC client.
  */
-async function updatePresence(): Promise<void> {
+function updatePresence(): void {
   if (!rpcClient) return;
 
-  await rpcClient.updatePresence({
+  void rpcClient.updatePresence({
     status: currentStatus,
     modelName: currentModelName || undefined,
+    sessionName: currentSessionName || undefined,
   });
 }
 
@@ -76,7 +83,7 @@ async function updatePresence(): Promise<void> {
  */
 export const DiscordRPCPlugin: Plugin = async (ctx) => {
   const config = getConfig();
-  
+
   if (!config.enabled) {
     console.log("[discord-rpc] Plugin disabled via configuration");
     return {};
@@ -84,57 +91,56 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
 
   // Create logger using OpenCode's logging system
   const log = createLogger(ctx.client);
-  
+
   // Initialize the RPC client
   rpcClient = new DiscordRPCClient((msg, level) => {
-    log(msg, level);
+    void log(msg, level);
   });
 
-  // Attempt initial connection
+  // Schedule initial connection without blocking plugin startup
   log("Initializing Discord Rich Presence...", "info");
-  const connected = await rpcClient.connect();
-  
-  if (connected) {
-    // Start with initial presence
-    rpcClient.startSession();
-    currentStatus = "idle";
-    await updatePresence();
-  }
+  void rpcClient.connect().then((connected) => {
+    if (connected) {
+      rpcClient?.startSession();
+      currentStatus = "idle";
+      updatePresence();
+    }
+  });
 
   // Return event hooks
   const hooks: Hooks = {
     // Hook into chat.message to get the model being used
     "chat.message": async (input) => {
       if (!rpcClient) return;
-      
+
       // Extract model info from the chat message
       if (input.model?.modelID) {
         const newModel = formatModelName(input.model.modelID);
         if (newModel !== currentModelName) {
           currentModelName = newModel;
           log(`Model detected: ${currentModelName}`, "debug");
-          await updatePresence();
+          updatePresence();
         }
       }
-      
+
       // We're actively chatting, so set status to thinking
       if (currentStatus !== "thinking") {
         currentStatus = "thinking";
-        await updatePresence();
+        updatePresence();
       }
     },
 
     // Hook into chat.params for additional model detection
     "chat.params": async (input) => {
       if (!rpcClient) return;
-      
+
       // Extract model from params
       if (input.model?.id) {
         const newModel = formatModelName(input.model.id);
         if (newModel !== currentModelName) {
           currentModelName = newModel;
           log(`Model from params: ${currentModelName}`, "debug");
-          await updatePresence();
+          updatePresence();
         }
       }
     },
@@ -143,11 +149,26 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
       if (!rpcClient) return;
 
       switch (event.type) {
-        case "session.created": {
+        case "session.created":
+        case "session.updated": {
+          const props = event.properties as {
+            info?: { directory?: string; title?: string };
+          } | undefined;
+
+          if (config.showSession && props?.info?.directory) {
+            // Show the project folder name, not the full path
+            const directory = props.info.directory.replace(/\/+$/, "");
+            const project = directory.split(/[\\/]/).pop();
+            if (project && project !== currentSessionName) {
+              currentSessionName = project;
+              log(`Session name detected: ${currentSessionName}`, "debug");
+            }
+          }
+
           // New session started - reset timer
           rpcClient.startSession();
           currentStatus = "coding";
-          await updatePresence();
+          updatePresence();
           break;
         }
 
@@ -155,21 +176,21 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
           // Status changed (busy/idle)
           const props = event.properties as { status?: { type: string } } | undefined;
           const statusType = props?.status?.type;
-          
+
           if (statusType === "busy") {
             currentStatus = "coding";
           } else if (statusType === "idle") {
             currentStatus = "waiting";
           }
-          
-          await updatePresence();
+
+          updatePresence();
           break;
         }
 
         case "session.idle": {
           // Session went idle
           currentStatus = "idle";
-          await updatePresence();
+          updatePresence();
           break;
         }
 
@@ -177,7 +198,8 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
           // Session ended
           currentStatus = "idle";
           currentModelName = null;
-          await rpcClient.clearPresence();
+          currentSessionName = null;
+          void rpcClient.clearPresence();
           break;
         }
 
@@ -185,7 +207,7 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
           // AI is generating a response
           if (currentStatus !== "thinking") {
             currentStatus = "thinking";
-            await updatePresence();
+            updatePresence();
           }
           break;
         }
@@ -196,7 +218,7 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
       // Tool is about to execute
       if (rpcClient && currentStatus !== "coding") {
         currentStatus = "coding";
-        await updatePresence();
+        updatePresence();
       }
     },
 
@@ -204,7 +226,7 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
       // Tool finished executing
       if (rpcClient && currentStatus !== "thinking") {
         currentStatus = "thinking";
-        await updatePresence();
+        updatePresence();
       }
     },
   };

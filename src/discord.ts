@@ -11,8 +11,11 @@ export type ActivityStatus = "coding" | "idle" | "thinking" | "waiting";
 export interface PresenceData {
   status: ActivityStatus;
   modelName?: string;
+  sessionName?: string;
   startTimestamp?: Date;
 }
+
+const PRESENCE_TIMEOUT_MS = 5000;
 
 export class DiscordRPCClient {
   private client: Client | null = null;
@@ -121,11 +124,18 @@ export class DiscordRPCClient {
     }
 
     const statusText = this.getStatusText(data.status);
-    const details = data.modelName ? `Using ${data.modelName}` : "Using OpenCode";
+    const details = data.sessionName
+      ? `${data.sessionName}`
+      : data.modelName
+        ? `Using ${data.modelName}`
+        : "Using OpenCode";
+    const state = data.modelName
+      ? `${data.modelName} • ${statusText}`
+      : statusText;
 
     const activity: SetActivity = {
       details,
-      state: statusText,
+      state,
       largeImageKey: "opencode_rp_large_dark_1024",
       largeImageText: "OpenCode - AI Coding Assistant",
       smallImageKey: "opencode_icon_tight_dark_1024",
@@ -144,10 +154,10 @@ export class DiscordRPCClient {
     }
 
     try {
-      await this.client.user.setActivity(activity);
+      await withTimeout(this.client.user.setActivity(activity), PRESENCE_TIMEOUT_MS);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.log(`Failed to update presence: ${errorMessage}`, "error");
+      this.log(`Failed to update presence: ${errorMessage !== "Timeout" ? errorMessage : "timeout - Discord not responding"}`, "error");
     }
   }
 
@@ -224,4 +234,24 @@ export class DiscordRPCClient {
   get connected(): boolean {
     return this.isConnected;
   }
+}
+
+/**
+ * Resolve a promise or reject with "Timeout" after the given milliseconds.
+ * Prevents `setActivity` from hanging forever when Discord/Vesktop is unresponsive.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

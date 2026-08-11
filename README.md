@@ -46,8 +46,8 @@ Once installed, the plugin automatically:
 ┌─────────────────────────────────────────┐
 │ [OpenCode Logo]                         │
 │                                         │
-│ Using gpt-4o                            │
-│ Coding...                               │
+│ my-project                              │
+│ gpt-4o • Coding...                      │
 │ 01:23:45 elapsed                        │
 │                                         │
 │ [ Visit OpenCode.ai ]                   │
@@ -64,8 +64,15 @@ For advanced users, you can customize behavior with environment variables:
 |----------|-------------|---------|
 | `OPENCODE_DISCORD_ENABLED` | Set to `"false"` to disable | `"true"` |
 | `OPENCODE_DISCORD_CLIENT_ID` | Use your own Discord Application | Built-in |
+| `OPENCODE_DISCORD_SHOW_SESSION` | Set to `"false"` to hide the session/project name | `"true"` |
 | `OPENCODE_DISCORD_RETRY_INTERVAL` | Reconnect interval (ms) | `15000` |
 | `OPENCODE_DISCORD_MAX_RETRIES` | Max reconnection attempts | `5` |
+
+## Privacy
+
+By default this plugin displays the current project folder name (e.g. `my-project`).
+It does NOT display file names, paths, or any code content. Set
+`OPENCODE_DISCORD_SHOW_SESSION` to `"false"` to hide the project name entirely.
 
 ## Requirements
 
@@ -86,18 +93,6 @@ The plugin will automatically retry if Discord isn't available. Common messages:
 
 - `"Discord is not running or not accessible"` - Discord desktop app is closed
 - `"Max retry attempts reached"` - Discord wasn't found after multiple attempts; restart OpenCode when Discord is running
-
-## Privacy
-
-This plugin does **not** display:
-- Your project name or path
-- File names or contents
-- Any code or conversation content
-
-It only shows:
-- The AI model being used
-- Your activity status
-- How long the session has been active
 
 ## Contributing
 
