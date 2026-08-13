@@ -25,6 +25,7 @@ let rpcClient: DiscordRPCClient | null = null;
 let currentModelName: string | null = null;
 let currentSessionName: string | null = null;
 let currentStatus: ActivityStatus = "idle";
+let currentSessionID: string | null = null;
 
 /**
  * Create a logging function that uses OpenCode's logging system
@@ -152,21 +153,34 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
         case "session.created":
         case "session.updated": {
           const props = event.properties as {
-            info?: { directory?: string; title?: string };
+            info?: { id?: string; directory?: string; title?: string; slug?: string };
           } | undefined;
 
-          if (config.showSession && props?.info?.directory) {
-            // Show the project folder name, not the full path
-            const directory = props.info.directory.replace(/\/+$/, "");
-            const project = directory.split(/[\\/]/).pop();
-            if (project && project !== currentSessionName) {
-              currentSessionName = project;
+          if (config.showSession && props?.info) {
+            // Prefer the auto-generated session title, falling back to the
+            // human-readable slug, then to the project folder name.
+            const { title, slug, directory } = props.info;
+            const name = title && !title.startsWith("New session -")
+              ? title
+              : slug || (directory ? directory.split(/[\\/]/).pop() : undefined);
+
+            if (name && name !== currentSessionName) {
+              currentSessionName = name;
               log(`Session name detected: ${currentSessionName}`, "debug");
             }
           }
 
-          // New session started - reset timer
-          rpcClient.startSession();
+          // Reset the elapsed timer ONLY when the session actually changes.
+          // session.updated fires on every message/token, and resetting there
+          // would keep the timer pinned at 0:00. A stable start timestamp also
+          // keeps the activity quiet so neovim/etc. can coexist.
+          const sessionID = props?.info?.id;
+          if (sessionID && sessionID !== currentSessionID) {
+            currentSessionID = sessionID;
+            rpcClient.startSession();
+            log(`New session started: ${sessionID}`, "debug");
+          }
+
           currentStatus = "coding";
           updatePresence();
           break;
@@ -199,7 +213,8 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
           currentStatus = "idle";
           currentModelName = null;
           currentSessionName = null;
-          void rpcClient.clearPresence();
+          currentSessionID = null;
+          rpcClient.clearPresence();
           break;
         }
 

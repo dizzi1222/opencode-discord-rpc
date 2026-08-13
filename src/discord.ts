@@ -16,6 +16,7 @@ export interface PresenceData {
 }
 
 const PRESENCE_TIMEOUT_MS = 5000;
+const UPDATE_DEBOUNCE_MS = 1000;
 
 export class DiscordRPCClient {
   private client: Client | null = null;
@@ -27,6 +28,8 @@ export class DiscordRPCClient {
   private currentPresence: PresenceData | null = null;
   private sessionStartTime: Date | null = null;
   private log: (message: string, level?: "info" | "warn" | "error" | "debug") => void;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSentKey: string | null = null;
 
   constructor(
     log?: (message: string, level?: "info" | "warn" | "error" | "debug") => void
@@ -62,6 +65,10 @@ export class DiscordRPCClient {
         this.retryCount = 0;
         this.log("Connected to Discord", "info");
         
+        // Force a resend after (re)connect: Discord may have cleared the
+        // activity while we were offline.
+        this.lastSentKey = null;
+
         // Restore presence if we had one
         if (this.currentPresence) {
           this.updatePresence(this.currentPresence);
@@ -123,6 +130,29 @@ export class DiscordRPCClient {
       return;
     }
 
+    // Debounce: coalesce rapid status flips (coding/thinking per tool call)
+    // into a single Discord update. This keeps opencode quiet so other RPC
+    // apps (neovim, etc.) can coexist instead of being flooded out.
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = setTimeout(() => {
+      void this.flushPresence();
+    }, UPDATE_DEBOUNCE_MS);
+  }
+
+  private async flushPresence(): Promise<void> {
+    this.debounceTimer = null;
+
+    if (!this.isConnected || !this.client?.user) {
+      return;
+    }
+
+    const data = this.currentPresence;
+    if (!data) {
+      return;
+    }
+
     const statusText = this.getStatusText(data.status);
     const details = data.sessionName
       ? `${data.sessionName}`
@@ -132,6 +162,15 @@ export class DiscordRPCClient {
     const state = data.modelName
       ? `${data.modelName} • ${statusText}`
       : statusText;
+    const start = this.sessionStartTime?.toISOString() ?? "";
+
+    // Skip the round-trip if nothing observable changed. Timer is NOT part of
+    // the key on purpose: it must never reset on status flips.
+    const key = `${details}|${state}|${start}`;
+    if (key === this.lastSentKey) {
+      return;
+    }
+    this.lastSentKey = key;
 
     const activity: SetActivity = {
       details,
@@ -166,6 +205,7 @@ export class DiscordRPCClient {
    */
   startSession(): void {
     this.sessionStartTime = new Date();
+    this.lastSentKey = null;
     this.log("Session started, timer reset", "debug");
   }
 
