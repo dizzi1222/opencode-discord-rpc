@@ -34,6 +34,16 @@ type SharedState = {
   currentStatus: ActivityStatus;
   currentSessionID: string | null;
   connected: Promise<boolean> | null;
+  /** True once we've cleared our activity to yield the line to presence.nvim. */
+  yielded: boolean;
+  /**
+   * Wall-clock time of the LAST real opencode activity (chat/tool/stream).
+   * The watchdog uses this to yield even when opencode never emits a clean
+   * "idle" event (e.g. after pressing stop mid-response).
+   */
+  lastActivityAt: number;
+  /** Watchdog interval handle (per process). */
+  watchdog: ReturnType<typeof setInterval> | null;
 };
 
 const g = globalThis as { __discordRpcShared?: SharedState };
@@ -46,7 +56,17 @@ const shared: SharedState =
     currentStatus: "idle",
     currentSessionID: null,
     connected: null,
+    yielded: false,
+    lastActivityAt: 0,
+    watchdog: null,
   });
+
+/**
+ * How long without real activity before handing the line to neovim. Debounced
+ * so brief busy<->idle flaps during a session don't flicker Discord.
+ */
+const YIELD_DEBOUNCE_MS = 2000;
+const ACTIVITY_FREQUENCY_MS = 500;
 
 /**
  * Create a logging function that uses OpenCode's logging system
@@ -84,6 +104,16 @@ function formatModelName(modelId: string | undefined): string {
 }
 
 /**
+ * Mark real opencode activity (chat message, tool execution, streaming).
+ * Publication is debounced inside the RPC client; here we just record the time
+ * and take the line back from neovim.
+ */
+function markActivity(): void {
+  shared.lastActivityAt = Date.now();
+  updatePresence();
+}
+
+/**
  * Update the Discord presence with current state.
  *
  * NOTE: This is intentionally fire-and-forget. It must NEVER block opencode's
@@ -93,11 +123,52 @@ function formatModelName(modelId: string | undefined): string {
 function updatePresence(): void {
   if (!shared.rpcClient) return;
 
+  // Any active update takes the line back from neovim.
+  shared.yielded = false;
+
   void shared.rpcClient.updatePresence({
     status: shared.currentStatus,
     modelName: shared.currentModelName || undefined,
     sessionName: shared.currentSessionName || undefined,
   });
+}
+
+/**
+ * Hand the Discord activity line over to presence.nvim. We publish under our
+ * own client id, so clearing our activity makes neovim's auto-updating card
+ * the only visible one.
+ */
+function yieldToNeovim(): void {
+  if (!shared.rpcClient) return;
+  if (shared.yielded) return;
+
+  shared.rpcClient.cancelPending();
+  shared.yielded = true;
+  void shared.rpcClient.clearPresence();
+}
+
+/**
+ * Watchdog: if opencode hasn't had REAL activity for YIELD_DEBOUNCE_MS, hand
+ * the line to neovim even if opencode never emitted a clean "idle" event
+ * (e.g. session stays active but the user pressed stop mid-response).
+ */
+function startWatchdog(): void {
+  if (shared.watchdog) return;
+
+  shared.watchdog = setInterval(() => {
+    if (!shared.rpcClient) return;
+    if (shared.connected === null) return;
+    if (shared.yielded) return;
+
+    // Only yield when there is an active session at all.
+    if (!shared.currentSessionID) return;
+
+    const idleMs = Date.now() - shared.lastActivityAt;
+    if (idleMs >= YIELD_DEBOUNCE_MS) {
+      shared.currentStatus = "idle";
+      yieldToNeovim();
+    }
+  }, ACTIVITY_FREQUENCY_MS);
 }
 
 /**
@@ -113,9 +184,11 @@ function ensureConnected(log: (message: string, level?: "info" | "warn" | "error
 
   shared.connected = shared.rpcClient.connect().then((connected) => {
     if (connected) {
-      shared.rpcClient?.startSession();
+      shared.rpcClient?.startSession(shared.currentSessionID ?? undefined);
       shared.currentStatus = "idle";
-      updatePresence();
+      startWatchdog();
+      // Do NOT publish "idle" on boot: if presence.nvim is running it should
+      // own the line until opencode actually does something.
     }
     return connected;
   });
@@ -152,15 +225,12 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
         if (newModel !== shared.currentModelName) {
           shared.currentModelName = newModel;
           log(`Model detected: ${shared.currentModelName}`, "debug");
-          updatePresence();
         }
       }
 
       // We're actively chatting, so set status to thinking
-      if (shared.currentStatus !== "thinking") {
-        shared.currentStatus = "thinking";
-        updatePresence();
-      }
+      shared.currentStatus = "thinking";
+      markActivity();
     },
 
     // Hook into chat.params for additional model detection
@@ -173,7 +243,6 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
         if (newModel !== shared.currentModelName) {
           shared.currentModelName = newModel;
           log(`Model from params: ${shared.currentModelName}`, "debug");
-          updatePresence();
         }
       }
     },
@@ -209,12 +278,16 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
           const sessionID = props?.info?.id;
           if (sessionID && sessionID !== shared.currentSessionID) {
             shared.currentSessionID = sessionID;
-            shared.rpcClient.startSession();
+            shared.rpcClient.startSession(sessionID);
             log(`New session started: ${sessionID}`, "debug");
           }
 
-          shared.currentStatus = "coding";
-          updatePresence();
+          // NOTE: session.updated fires on EVERY message/token, so we must NOT
+          // touch the status or call updatePresence() here — doing so would
+          // cancel any pending yield (yieldToNeovim) on every event and leave
+          // opencode's presence stuck on screen forever. Status is driven only
+          // by the real transitions: session.status busy/idle, chat.message,
+          // message.part.updated and tool.execute.*.
           break;
         }
 
@@ -225,37 +298,38 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
 
           if (statusType === "busy") {
             shared.currentStatus = "coding";
+            markActivity();
           } else if (statusType === "idle") {
             shared.currentStatus = "waiting";
+            yieldToNeovim();
           }
-
-          updatePresence();
           break;
         }
 
         case "session.idle": {
           // Session went idle
           shared.currentStatus = "idle";
-          updatePresence();
+          yieldToNeovim();
           break;
         }
 
         case "session.deleted": {
-          // Session ended
+          // Session ended: release the line immediately.
           shared.currentStatus = "idle";
           shared.currentModelName = null;
           shared.currentSessionName = null;
           shared.currentSessionID = null;
-          shared.rpcClient.clearPresence();
+          shared.yielded = true;
+          shared.lastActivityAt = 0;
+          shared.rpcClient.cancelPending();
+          void shared.rpcClient.clearPresence();
           break;
         }
 
         case "message.part.updated": {
           // AI is generating a response
-          if (shared.currentStatus !== "thinking") {
-            shared.currentStatus = "thinking";
-            updatePresence();
-          }
+          shared.currentStatus = "thinking";
+          markActivity();
           break;
         }
       }
@@ -263,18 +337,16 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
 
     "tool.execute.before": async () => {
       // Tool is about to execute
-      if (shared.rpcClient && shared.currentStatus !== "coding") {
-        shared.currentStatus = "coding";
-        updatePresence();
-      }
+      if (!shared.rpcClient) return;
+      shared.currentStatus = "coding";
+      markActivity();
     },
 
     "tool.execute.after": async () => {
       // Tool finished executing
-      if (shared.rpcClient && shared.currentStatus !== "thinking") {
-        shared.currentStatus = "thinking";
-        updatePresence();
-      }
+      if (!shared.rpcClient) return;
+      shared.currentStatus = "thinking";
+      markActivity();
     },
   };
 

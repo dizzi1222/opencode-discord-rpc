@@ -2,8 +2,13 @@
  * Configuration for the Discord Rich Presence plugin
  */
 
-// Default Discord Application Client ID for OpenCode
-// Users can override this with their own Application ID
+// Default Discord Application Client ID — the "opencode" app (1462).
+//
+// Keep this SEPARATE from presence.nvim's client id (7932 = "Neovim"):
+// each app publishes under its own identity so Discord shows the correct
+// title/logo for each. Alternation works via clear-on-idle: opencode yields
+// the screen by removing its own activity when idle, never by reusing the
+// Neovim application id. Override with OPENCODE_DISCORD_CLIENT_ID if needed.
 export const DEFAULT_CLIENT_ID = "1462270555586822206";
 
 export interface PluginConfig {

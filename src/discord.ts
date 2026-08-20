@@ -5,6 +5,9 @@
 import { Client } from "@xhayper/discord-rpc";
 import type { SetActivity } from "@xhayper/discord-rpc";
 import { getConfig, type PluginConfig } from "./config.js";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 export type ActivityStatus = "coding" | "idle" | "thinking" | "waiting";
 
@@ -17,6 +20,40 @@ export interface PresenceData {
 
 const PRESENCE_TIMEOUT_MS = 5000;
 const UPDATE_DEBOUNCE_MS = 1000;
+
+/**
+ * Persisted session start so the elapsed timer survives reconnects (Discord
+ * restarts, opencode reloads). Keyed by session id: the timer only resets when
+ * the actual session changes.
+ */
+const START_FILE = join(homedir(), ".cache", "opencode-discord-rpc", "session-start");
+
+function loadPersistedStart(sessionId: string): Date | null {
+  try {
+    const raw = readFileSync(START_FILE, "utf8").trim();
+    const line = raw.split("\n").find((l) => l.startsWith(`${sessionId} `));
+    if (!line) return null;
+    const epoch = Number(line.split(" ")[1]);
+    return Number.isFinite(epoch) ? new Date(epoch) : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistStart(sessionId: string, date: Date): void {
+  try {
+    mkdirSync(dirname(START_FILE), { recursive: true });
+    // Keep a tiny history (last 5) instead of a single line, so a previous
+    // session's timestamp never leaks into a new one.
+    const lines = (readFileSync(START_FILE, "utf8").trim() || "").split("\n")
+      .filter((l) => l && !l.startsWith(`${sessionId} `))
+      .slice(-4);
+    lines.push(`${sessionId} ${date.getTime()}`);
+    writeFileSync(START_FILE, lines.join("\n") + "\n");
+  } catch {
+    // Persistence is best-effort; a failed write must not break presence.
+  }
+}
 
 export class DiscordRPCClient {
   private client: Client | null = null;
@@ -201,12 +238,31 @@ export class DiscordRPCClient {
   }
 
   /**
-   * Start a new session (resets the timer)
+   * Start a new session (resets the timer). The timer is persisted keyed by
+   * session id, so reconnects/alternations don't reset the elapsed display.
    */
-  startSession(): void {
-    this.sessionStartTime = new Date();
+  startSession(sessionId?: string): void {
+    if (sessionId) {
+      const persisted = loadPersistedStart(sessionId);
+      if (persisted) {
+        this.sessionStartTime = persisted;
+        this.lastSentKey = null;
+        this.log(`Session continued, timer kept (${sessionId})`, "debug");
+        return;
+      }
+      this.sessionStartTime = new Date();
+      persistStart(sessionId, this.sessionStartTime);
+      this.lastSentKey = null;
+      this.log(`Session started, timer reset (${sessionId})`, "debug");
+      return;
+    }
+
+    // Legacy call without session id: keep whatever we have.
+    if (!this.sessionStartTime) {
+      this.sessionStartTime = new Date();
+    }
     this.lastSentKey = null;
-    this.log("Session started, timer reset", "debug");
+    this.log("Session timer ensured", "debug");
   }
 
   /**
@@ -225,6 +281,20 @@ export class DiscordRPCClient {
       default:
         return "Using OpenCode";
     }
+  }
+
+  /**
+   * Drop any pending (debounced) SET so a stale update can't re-publish the
+   * activity after we clear it. Used when yielding the line to another client
+   * sharing the same client id (e.g. presence.nvim).
+   */
+  cancelPending(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    this.lastSentKey = null;
+    this.currentPresence = null;
   }
 
   /**
