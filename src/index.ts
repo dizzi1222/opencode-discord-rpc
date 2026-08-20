@@ -282,11 +282,13 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
 
           if (config.showSession && props?.info) {
             // Prefer the auto-generated session title, falling back to the
-            // human-readable slug, then to the project folder name.
+            // project folder name. Skip "New session - <slug>" titles and their
+            // slugs (e.g., "tidy-wolf") — they're not meaningful.
             const { title, slug, directory } = props.info;
-            const name = title && !title.startsWith("New session -")
+            const isNewSession = title?.startsWith("New session -");
+            const name = title && !isNewSession
               ? title
-              : slug || (directory ? directory.split(/[\\/]/).pop() : undefined);
+              : (directory ? directory.split(/[\\/]/).pop() : undefined);
 
             if (name && name !== shared.currentSessionName) {
               shared.currentSessionName = name;
