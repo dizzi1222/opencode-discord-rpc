@@ -28,6 +28,8 @@ const UPDATE_DEBOUNCE_MS = 1000;
  * is actually running. Keyed by session id.
  */
 const ACTIVE_TIME_FILE = join(homedir(), ".cache", "opencode-discord-rpc", "session-active-time");
+// Legacy file (wall-clock start timestamps) — used for one-time migration
+const LEGACY_START_FILE = join(homedir(), ".cache", "opencode-discord-rpc", "session-start");
 
 interface PersistedActiveTime {
   accumulatedMs: number;
@@ -44,6 +46,26 @@ function loadPersistedActiveTime(sessionId: string): PersistedActiveTime | null 
     const lastActiveAt = Number(parts[2]);
     if (!Number.isFinite(accumulatedMs) || !Number.isFinite(lastActiveAt)) return null;
     return { accumulatedMs, lastActiveAt };
+  } catch {
+    // Try legacy migration
+    return migrateLegacyStartTime(sessionId);
+  }
+}
+
+function migrateLegacyStartTime(sessionId: string): PersistedActiveTime | null {
+  try {
+    const raw = readFileSync(LEGACY_START_FILE, "utf8").trim();
+    const line = raw.split("\n").find((l) => l.startsWith(`${sessionId} `));
+    if (!line) return null;
+    const epoch = Number(line.split(" ")[1]);
+    if (!Number.isFinite(epoch)) return null;
+
+    // Calculate wall-clock elapsed since that start, use as initial accumulated time
+    // This is an approximation (includes closed time), but preserves history
+    const accumulatedMs = Date.now() - epoch;
+    if (accumulatedMs < 0 || accumulatedMs > 365 * 24 * 60 * 60 * 1000) return null; // Sanity check
+
+    return { accumulatedMs, lastActiveAt: Date.now() };
   } catch {
     return null;
   }
