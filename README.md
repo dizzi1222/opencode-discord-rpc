@@ -66,6 +66,18 @@ keyed por session id). Solo cuenta tiempo cuando OpenCode está ejecutándose �
 se pausa al cerrar/hibernar y reanuda al reabrir. El contador no se reinicia
 al alternar con Neovim ni al reconectar Discord.
 
+### Migración desde versiones anteriores
+
+Si actualizás desde una versión que usaba wall-clock time (`session-start`), el plugin
+migra automáticamente el timestamp histórico:
+
+1. Lee el archivo legacy `~/.cache/opencode-discord-rpc/session-start`
+2. Calcula el tiempo wall-clock transcurrido desde el inicio original
+3. Usa ese valor como `accumulatedActiveMs` inicial (aproximación que incluye tiempo cerrado)
+4. A partir de ahí, solo cuenta tiempo activo real
+
+Esto preserva tu historial de ~11h en la primera ejecución tras actualizar.
+
 Flujo típico:
 
 ```
@@ -122,6 +134,17 @@ For advanced users, you can customize behavior with environment variables:
 > actividad que alterna contenido), setea `OPENCODE_DISCORD_CLIENT_ID` al
 > mismo id que usa presence.nvim (`793271441293967371`) — en ese caso el
 > título/logo serán los de Neovim.
+
+## Session Names
+
+By default the plugin shows the session title in Discord. For new unnamed sessions
+(which get auto-generated titles like "New session - tidy-wolf"), it falls back to
+the project folder name instead of the random slug.
+
+It filters out common non-project directory names (home, diego, root, Users, user)
+so sessions started from `~` won't show your username.
+
+Set `OPENCODE_DISCORD_SHOW_SESSION=false` to hide the session/project name entirely.
 
 ## Privacy
 
