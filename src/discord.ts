@@ -14,6 +14,7 @@ export type ActivityStatus = "coding" | "idle" | "thinking" | "waiting";
 export interface PresenceData {
   status: ActivityStatus;
   modelName?: string;
+  providerID?: string;
   sessionName?: string;
   startTimestamp?: Date;
 }
@@ -22,34 +23,40 @@ const PRESENCE_TIMEOUT_MS = 5000;
 const UPDATE_DEBOUNCE_MS = 1000;
 
 /**
- * Persisted session start so the elapsed timer survives reconnects (Discord
- * restarts, opencode reloads). Keyed by session id: the timer only resets when
- * the actual session changes.
+ * Persisted session active time so the elapsed timer survives reconnects
+ * (Discord restarts, opencode reloads) but ONLY counts time when opencode
+ * is actually running. Keyed by session id.
  */
-const START_FILE = join(homedir(), ".cache", "opencode-discord-rpc", "session-start");
+const ACTIVE_TIME_FILE = join(homedir(), ".cache", "opencode-discord-rpc", "session-active-time");
 
-function loadPersistedStart(sessionId: string): Date | null {
+interface PersistedActiveTime {
+  accumulatedMs: number;
+  lastActiveAt: number;
+}
+
+function loadPersistedActiveTime(sessionId: string): PersistedActiveTime | null {
   try {
-    const raw = readFileSync(START_FILE, "utf8").trim();
+    const raw = readFileSync(ACTIVE_TIME_FILE, "utf8").trim();
     const line = raw.split("\n").find((l) => l.startsWith(`${sessionId} `));
     if (!line) return null;
-    const epoch = Number(line.split(" ")[1]);
-    return Number.isFinite(epoch) ? new Date(epoch) : null;
+    const parts = line.split(" ");
+    const accumulatedMs = Number(parts[1]);
+    const lastActiveAt = Number(parts[2]);
+    if (!Number.isFinite(accumulatedMs) || !Number.isFinite(lastActiveAt)) return null;
+    return { accumulatedMs, lastActiveAt };
   } catch {
     return null;
   }
 }
 
-function persistStart(sessionId: string, date: Date): void {
+function persistActiveTime(sessionId: string, data: PersistedActiveTime): void {
   try {
-    mkdirSync(dirname(START_FILE), { recursive: true });
-    // Keep a tiny history (last 5) instead of a single line, so a previous
-    // session's timestamp never leaks into a new one.
-    const lines = (readFileSync(START_FILE, "utf8").trim() || "").split("\n")
+    mkdirSync(dirname(ACTIVE_TIME_FILE), { recursive: true });
+    const lines = (readFileSync(ACTIVE_TIME_FILE, "utf8").trim() || "").split("\n")
       .filter((l) => l && !l.startsWith(`${sessionId} `))
       .slice(-4);
-    lines.push(`${sessionId} ${date.getTime()}`);
-    writeFileSync(START_FILE, lines.join("\n") + "\n");
+    lines.push(`${sessionId} ${data.accumulatedMs} ${data.lastActiveAt}`);
+    writeFileSync(ACTIVE_TIME_FILE, lines.join("\n") + "\n");
   } catch {
     // Persistence is best-effort; a failed write must not break presence.
   }
@@ -64,6 +71,9 @@ export class DiscordRPCClient {
   private retryTimeout: ReturnType<typeof setTimeout> | null = null;
   private currentPresence: PresenceData | null = null;
   private sessionStartTime: Date | null = null;
+  private accumulatedActiveMs = 0;
+  private lastActiveAt = 0;
+  private currentSessionId: string | null = null;
   private log: (message: string, level?: "info" | "warn" | "error" | "debug") => void;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSentKey: string | null = null;
@@ -190,15 +200,23 @@ export class DiscordRPCClient {
       return;
     }
 
+    const config = getConfig();
     const statusText = this.getStatusText(data.status);
+    const providerName = config.showProvider ? this.getProviderName(data.providerID) : null;
+
     const details = data.sessionName
       ? `${data.sessionName}`
       : data.modelName
         ? `Using ${data.modelName}`
         : "Using OpenCode";
-    const state = data.modelName
-      ? `${data.modelName} • ${statusText}`
-      : statusText;
+
+    let state = statusText;
+    if (data.modelName && providerName) {
+      state = `${providerName} ${data.modelName} • ${statusText}`;
+    } else if (data.modelName) {
+      state = `${data.modelName} • ${statusText}`;
+    }
+
     const start = this.sessionStartTime?.toISOString() ?? "";
 
     // Skip the round-trip if nothing observable changed. Timer is NOT part of
@@ -240,18 +258,26 @@ export class DiscordRPCClient {
   /**
    * Start a new session (resets the timer). The timer is persisted keyed by
    * session id, so reconnects/alternations don't reset the elapsed display.
+   * Only counts active time when opencode is running.
    */
   startSession(sessionId?: string): void {
     if (sessionId) {
-      const persisted = loadPersistedStart(sessionId);
+      this.currentSessionId = sessionId;
+      const persisted = loadPersistedActiveTime(sessionId);
       if (persisted) {
-        this.sessionStartTime = persisted;
+        this.accumulatedActiveMs = persisted.accumulatedMs;
+        // Calculate effective start time for Discord display (now - accumulated active time)
+        this.sessionStartTime = new Date(Date.now() - this.accumulatedActiveMs);
+        this.lastActiveAt = Date.now(); // Start fresh tracking from now
         this.lastSentKey = null;
-        this.log(`Session continued, timer kept (${sessionId})`, "debug");
+        this.log(`Session continued, active time: ${this.formatDuration(this.accumulatedActiveMs)} (${sessionId})`, "debug");
         return;
       }
+      // New session
+      this.accumulatedActiveMs = 0;
       this.sessionStartTime = new Date();
-      persistStart(sessionId, this.sessionStartTime);
+      this.lastActiveAt = Date.now();
+      this.persistCurrentState();
       this.lastSentKey = null;
       this.log(`Session started, timer reset (${sessionId})`, "debug");
       return;
@@ -260,9 +286,45 @@ export class DiscordRPCClient {
     // Legacy call without session id: keep whatever we have.
     if (!this.sessionStartTime) {
       this.sessionStartTime = new Date();
+      this.lastActiveAt = Date.now();
     }
     this.lastSentKey = null;
     this.log("Session timer ensured", "debug");
+  }
+
+  /**
+   * Mark activity - updates accumulated active time.
+   * Call this whenever there's real user/AI activity.
+   */
+  markActivity(): void {
+    const now = Date.now();
+    if (this.lastActiveAt > 0) {
+      this.accumulatedActiveMs += now - this.lastActiveAt;
+    }
+    this.lastActiveAt = now;
+    // Update sessionStartTime for Discord display (now - accumulated)
+    this.sessionStartTime = new Date(now - this.accumulatedActiveMs);
+    this.lastSentKey = null; // Force presence update
+    this.persistCurrentState();
+  }
+
+  private persistCurrentState(): void {
+    if (this.currentSessionId) {
+      persistActiveTime(this.currentSessionId, {
+        accumulatedMs: this.accumulatedActiveMs,
+        lastActiveAt: this.lastActiveAt,
+      });
+    }
+  }
+
+  private formatDuration(ms: number): string {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
   }
 
   /**
@@ -281,6 +343,36 @@ export class DiscordRPCClient {
       default:
         return "Using OpenCode";
     }
+  }
+
+  /**
+   * Get human-readable provider name from provider ID
+   */
+  private getProviderName(providerID: string | undefined): string | null {
+    if (!providerID) return null;
+
+    const providerMap: Record<string, string> = {
+      openai: "OpenAI",
+      anthropic: "Anthropic",
+      google: "Google",
+      openrouter: "OpenRouter",
+      groq: "Groq",
+      copilot: "GitHub Copilot",
+      ollama: "Ollama",
+      perplexity: "Perplexity",
+      together: "Together AI",
+      fireworks: "Fireworks AI",
+      deepseek: "DeepSeek",
+      mistral: "Mistral",
+      cohere: "Cohere",
+      vertex: "Vertex AI",
+      bedrock: "AWS Bedrock",
+      azure: "Azure OpenAI",
+      cloudflare: "Cloudflare Workers AI",
+      xai: "xAI",
+    };
+
+    return providerMap[providerID.toLowerCase()] ?? providerID;
   }
 
   /**

@@ -18,6 +18,8 @@ export interface PluginConfig {
   enabled: boolean;
   /** Whether to show the session/project name */
   showSession: boolean;
+  /** Whether to show the provider name */
+  showProvider: boolean;
   /** Retry connection interval in ms */
   retryInterval: number;
   /** Maximum retry attempts before giving up */
@@ -32,6 +34,7 @@ export function getConfig(): PluginConfig {
     clientId: process.env.OPENCODE_DISCORD_CLIENT_ID || DEFAULT_CLIENT_ID,
     enabled: process.env.OPENCODE_DISCORD_ENABLED !== "false",
     showSession: process.env.OPENCODE_DISCORD_SHOW_SESSION !== "false",
+    showProvider: process.env.OPENCODE_DISCORD_SHOW_PROVIDER !== "false",
     retryInterval: parseInt(process.env.OPENCODE_DISCORD_RETRY_INTERVAL || "15000", 10),
     maxRetries: parseInt(process.env.OPENCODE_DISCORD_MAX_RETRIES || "5", 10),
   };

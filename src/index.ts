@@ -30,6 +30,7 @@ import { getConfig } from "./config.js";
 type SharedState = {
   rpcClient: DiscordRPCClient | null;
   currentModelName: string | null;
+  currentProviderID: string | null;
   currentSessionName: string | null;
   currentStatus: ActivityStatus;
   currentSessionID: string | null;
@@ -52,6 +53,7 @@ const shared: SharedState =
   (g.__discordRpcShared = {
     rpcClient: null,
     currentModelName: null,
+    currentProviderID: null,
     currentSessionName: null,
     currentStatus: "idle",
     currentSessionID: null,
@@ -105,11 +107,13 @@ function formatModelName(modelId: string | undefined): string {
 
 /**
  * Mark real opencode activity (chat message, tool execution, streaming).
- * Publication is debounced inside the RPC client; here we just record the time
- * and take the line back from neovim.
+ * Updates the RPC client's active time tracking and triggers presence update.
  */
 function markActivity(): void {
   shared.lastActivityAt = Date.now();
+  if (shared.rpcClient) {
+    shared.rpcClient.markActivity();
+  }
   updatePresence();
 }
 
@@ -129,6 +133,7 @@ function updatePresence(): void {
   void shared.rpcClient.updatePresence({
     status: shared.currentStatus,
     modelName: shared.currentModelName || undefined,
+    providerID: shared.currentProviderID || undefined,
     sessionName: shared.currentSessionName || undefined,
   });
 }
@@ -228,6 +233,15 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
         }
       }
 
+      // Extract provider info from the chat message
+      if (input.model?.providerID) {
+        const newProvider = input.model.providerID;
+        if (newProvider !== shared.currentProviderID) {
+          shared.currentProviderID = newProvider;
+          log(`Provider detected: ${shared.currentProviderID}`, "debug");
+        }
+      }
+
       // We're actively chatting, so set status to thinking
       shared.currentStatus = "thinking";
       markActivity();
@@ -243,6 +257,15 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
         if (newModel !== shared.currentModelName) {
           shared.currentModelName = newModel;
           log(`Model from params: ${shared.currentModelName}`, "debug");
+        }
+      }
+
+      // Extract provider from params
+      if (input.model?.providerID) {
+        const newProvider = input.model.providerID;
+        if (newProvider !== shared.currentProviderID) {
+          shared.currentProviderID = newProvider;
+          log(`Provider from params: ${shared.currentProviderID}`, "debug");
         }
       }
     },
@@ -317,6 +340,7 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
           // Session ended: release the line immediately.
           shared.currentStatus = "idle";
           shared.currentModelName = null;
+          shared.currentProviderID = null;
           shared.currentSessionName = null;
           shared.currentSessionID = null;
           shared.yielded = true;

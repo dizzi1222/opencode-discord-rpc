@@ -6,9 +6,9 @@ Discord Rich Presence plugin for [OpenCode](https://opencode.ai) - Show your AI-
 
 ## Features
 
-- Shows your current AI model being used (GPT-4, Claude, etc.)
-- Displays session duration (elapsed time)
-- Shows activity status (Coding/Idle/Thinking)
+- Shows your current AI provider and model (e.g., "OpenAI gpt-4o", "Anthropic claude-sonnet-4")
+- Displays **active session duration** — only counts time when OpenCode is actually running (pauses when closed/hibernated)
+- Shows activity status (Coding/Idle/Thinking/Waiting)
 - Clickable button to visit OpenCode.ai
 - Auto-reconnects if Discord restarts
 - **Neovim coexistence**: automatically yields the activity line to
@@ -61,9 +61,10 @@ propia Discord Application (título y logo correctos para cada app):
 - Cuando volvés a trabajar en OpenCode (mensaje, tool, streaming) retoma su
   tarjeta de inmediato.
 
-El timer de sesión se persiste (`~/.cache/opencode-discord-rpc/session-start`
-keyed por session id), así el contador de elapsed no se reinicia al alternar
-ni al reconectar Discord.
+El timer de **tiempo activo** se persiste (`~/.cache/opencode-discord-rpc/session-active-time`
+keyed por session id). Solo cuenta tiempo cuando OpenCode está ejecutándose —
+se pausa al cerrar/hibernar y reanuda al reabrir. El contador no se reinicia
+al alternar con Neovim ni al reconectar Discord.
 
 Flujo típico:
 
@@ -91,8 +92,8 @@ archivo de la config de Neovim.
 │ [OpenCode Logo]                         │
 │                                         │
 │ my-project                              │
-│ gpt-4o • Coding...                      │
-│ 01:23:45 elapsed                        │
+│ OpenAI gpt-4o • Coding...               │
+│ 01:23:45 elapsed (active time)          │
 │                                         │
 │ [ Visit OpenCode.ai ]                   │
 └─────────────────────────────────────────┘
@@ -107,13 +108,14 @@ The plugin works out of the box with no configuration needed.
 
 For advanced users, you can customize behavior with environment variables:
 
-| Variable                          | Description                                       | Default                                          |
-| --------------------------------- | ------------------------------------------------- | ------------------------------------------------ |
-| `OPENCODE_DISCORD_ENABLED`        | Set to `"false"` to disable                       | `"true"`                                         |
-| `OPENCODE_DISCORD_CLIENT_ID`      | Use your own Discord Application                  | `1462270555586822206` (app "opencode") |
-| `OPENCODE_DISCORD_SHOW_SESSION`   | Set to `"false"` to hide the session/project name | `"true"`                                         |
-| `OPENCODE_DISCORD_RETRY_INTERVAL` | Reconnect interval (ms)                           | `15000`                                          |
-| `OPENCODE_DISCORD_MAX_RETRIES`    | Max reconnection attempts                         | `5`                                              |
+| Variable                              | Description                                       | Default                                          |
+| ------------------------------------- | ------------------------------------------------- | ------------------------------------------------ |
+| `OPENCODE_DISCORD_ENABLED`            | Set to `"false"` to disable                       | `"true"`                                         |
+| `OPENCODE_DISCORD_CLIENT_ID`          | Use your own Discord Application                  | `1462270555586822206` (app "opencode") |
+| `OPENCODE_DISCORD_SHOW_SESSION`       | Set to `"false"` to hide the session/project name | `"true"`                                         |
+| `OPENCODE_DISCORD_SHOW_PROVIDER`      | Set to `"false"` to hide the provider name        | `"true"`                                         |
+| `OPENCODE_DISCORD_RETRY_INTERVAL`     | Reconnect interval (ms)                           | `15000`                                          |
+| `OPENCODE_DISCORD_MAX_RETRIES`        | Max reconnection attempts                         | `5`                                              |
 
 > **Tip**: el default usa la app "opencode" separada de la de presence.nvim.
 > Si querés que OpenCode y Neovim compartan la **misma** línea (una sola
