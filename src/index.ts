@@ -286,9 +286,20 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
             // slugs (e.g., "tidy-wolf") — they're not meaningful.
             const { title, slug, directory } = props.info;
             const isNewSession = title?.startsWith("New session -");
+            
+            // Get project folder name from directory, skipping common non-project names
+            let projectName: string | undefined;
+            if (directory) {
+              const base = directory.split(/[\\/]/).pop();
+              // Skip common non-project directory names
+              if (base && !["home", "diego", "root", "Users", "user"].includes(base.toLowerCase())) {
+                projectName = base;
+              }
+            }
+            
             const name = title && !isNewSession
               ? title
-              : (directory ? directory.split(/[\\/]/).pop() : undefined);
+              : projectName;
 
             if (name && name !== shared.currentSessionName) {
               shared.currentSessionName = name;
