@@ -4,7 +4,7 @@
 
 // Default Discord Application Client ID — the "opencode" app (1462).
 //
-// Keep this SEPARATE from presence.nvim's client id (7932 = "Neovim"):
+// Keep this SEPARATE from cord.nvim's client id (7932 = "Neovim"):
 // each app publishes under its own identity so Discord shows the correct
 // title/logo for each. Alternation works via clear-on-idle: opencode yields
 // the screen by removing its own activity when idle, never by reusing the

@@ -12,7 +12,7 @@ Discord Rich Presence plugin for [OpenCode](https://opencode.ai) - Show your AI-
 - Clickable button to visit OpenCode.ai
 - Auto-reconnects if Discord restarts
 - **Neovim coexistence**: automatically yields the activity line to
-  [presence.nvim](https://github.com/andweeb/presence.nvim) when OpenCode is
+  [cord.nvim](https://github.com/vyfor/cord.nvim) when OpenCode is
   idle, and takes it back when you start working again.
 
 ## Installation
@@ -30,9 +30,9 @@ For global installation, add it to `~/.config/opencode/opencode.json`.
 
 That's it! Restart OpenCode and your Discord Rich Presence will appear.
 
-> **Fork note**: this repo is a personal fork. The default client id matches
-> the one used by `presence.nvim` so both apps share the same activity line
-> and alternate. See [Alternancia con neovim](#alternancia-con-neovim).
+> **Fork note**: this repo is a personal fork. By default OpenCode publishes
+> with its own Discord Application ("opencode"), while Neovim keeps the one
+> used by `cord.nvim` — each app shows its own card. See [Alternancia con neovim](#alternancia-con-neovim).
 
 ## How It Works
 
@@ -52,12 +52,12 @@ OpenCode y Neovim publican con **identidades propias** — cada uno con su
 propia Discord Application (título y logo correctos para cada app):
 
 - OpenCode usa su propia app (`1462270555586822206` → "opencode") y
-  presence.nvim usa la suya (`793271441293967371` → "Neovim").
+  cord.nvim usa la suya (`793271441293967371` → "Neovim").
 - Cuando OpenCode está **activo** (trabajando, respondiendo, ejecutando
   tools), publica su actividad → se ve la tarjeta "opencode".
 - Cuando OpenCode queda **idle** (esperando input, sesión idle/borrada, o sin
   actividad real por 2s) el plugin `clearActivity()` → la tarjeta de opencode
-  desaparece y solo queda la de presence.nvim ("Neovim").
+  desaparece y solo queda la de cord.nvim ("Neovim").
 - Cuando volvés a trabajar en OpenCode (mensaje, tool, streaming) retoma su
   tarjeta de inmediato.
 
@@ -81,7 +81,7 @@ Esto preserva tu historial de ~11h en la primera ejecución tras actualizar.
 Flujo típico:
 
 ```
-Tarjeta Neovim "editing foo.ts"            (presence.nvim)
+Tarjeta Neovim "editing foo.ts"            (cord.nvim)
         │  escribís una tarea en OpenCode
         ▼
 Tarjeta "opencode" "repo • claude • Coding..."   + Neovim (ambas visibles)
@@ -93,9 +93,8 @@ opencode hace clearActivity → su tarjeta desaparece
 Solo queda "Neovim: editing foo.ts"
 ```
 
-Con `auto_update = true` en presence.nvim, la tarjeta de Neovim se mantiene
-fresca mientras editás, así que la alternancia sucede sola. No se toca ningún
-archivo de la config de Neovim.
+cord.nvim mantiene la tarjeta de Neovim fresca mientras editás, así que la
+alternancia sucede sola. No se toca ningún archivo de la config de Neovim.
 
 ## Rich Presence Display
 
@@ -112,7 +111,7 @@ archivo de la config de Neovim.
 ```
 
 Cuando OpenCode cede la línea a Neovim (idle), esta tarjeta desaparece y la
-de presence.nvim queda como única actividad visible.
+de cord.nvim queda como única actividad visible.
 
 ## Configuration
 
@@ -129,10 +128,10 @@ For advanced users, you can customize behavior with environment variables:
 | `OPENCODE_DISCORD_RETRY_INTERVAL`     | Reconnect interval (ms)                           | `15000`                                          |
 | `OPENCODE_DISCORD_MAX_RETRIES`        | Max reconnection attempts                         | `5`                                              |
 
-> **Tip**: el default usa la app "opencode" separada de la de presence.nvim.
+> **Tip**: el default usa la app "opencode" separada de la de cord.nvim.
 > Si querés que OpenCode y Neovim compartan la **misma** línea (una sola
 > actividad que alterna contenido), setea `OPENCODE_DISCORD_CLIENT_ID` al
-> mismo id que usa presence.nvim (`793271441293967371`) — en ese caso el
+> mismo id que usa cord.nvim (`793271441293967371`) — en ese caso el
 > título/logo serán los de Neovim.
 
 ## Session Names
@@ -169,7 +168,7 @@ It does NOT display file names, paths, or any code content. Set
 
 OpenCode y Neovim son apps separadas por defecto (`1462270555586822206` y
 `793271441293967371`). Si ves la tarjeta con identidad de Neovim para
-OpenCode, es porque el fork está usando el client id de presence.nvim
+OpenCode, es porque el fork está usando el client id de cord.nvim
 (override en `OPENCODE_DISCORD_CLIENT_ID` o build con el id compartido).
 Reconstruí con el default o setea la env al id de la app "opencode".
 

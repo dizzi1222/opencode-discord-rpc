@@ -400,7 +400,7 @@ export class DiscordRPCClient {
   /**
    * Drop any pending (debounced) SET so a stale update can't re-publish the
    * activity after we clear it. Used when yielding the line to another client
-   * sharing the same client id (e.g. presence.nvim).
+   * sharing the same client id (e.g. cord.nvim).
    */
   cancelPending(): void {
     if (this.debounceTimer) {

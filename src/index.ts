@@ -35,7 +35,7 @@ type SharedState = {
   currentStatus: ActivityStatus;
   currentSessionID: string | null;
   connected: Promise<boolean> | null;
-  /** True once we've cleared our activity to yield the line to presence.nvim. */
+  /** True once we've cleared our activity to yield the line to cord.nvim. */
   yielded: boolean;
   /**
    * Wall-clock time of the LAST real opencode activity (chat/tool/stream).
@@ -139,7 +139,7 @@ function updatePresence(): void {
 }
 
 /**
- * Hand the Discord activity line over to presence.nvim. We publish under our
+ * Hand the Discord activity line over to cord.nvim. We publish under our
  * own client id, so clearing our activity makes neovim's auto-updating card
  * the only visible one.
  */
@@ -192,7 +192,7 @@ function ensureConnected(log: (message: string, level?: "info" | "warn" | "error
       shared.rpcClient?.startSession(shared.currentSessionID ?? undefined);
       shared.currentStatus = "idle";
       startWatchdog();
-      // Do NOT publish "idle" on boot: if presence.nvim is running it should
+      // Do NOT publish "idle" on boot: if cord.nvim is running it should
       // own the line until opencode actually does something.
     }
     return connected;
