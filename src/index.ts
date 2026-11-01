@@ -268,7 +268,15 @@ async function setupDiscordV2(ctx: V2Context): Promise<(() => void) | undefined>
   const log = createLogger({ app: ctx.app } as PluginInput["client"])
   ensureConnected(log)
 
-  await ctx.session.hook("context", (event) => {
+  await ctx.session.hook("context", async (event) => {
+    if (event.sessionID && (!shared.currentSessionName || event.sessionID !== shared.currentSessionID)) {
+      try {
+        const info = await ctx.session.get({ sessionID: event.sessionID })
+        updateSessionInfo({ info }, config, log)
+      } catch {
+        ensureSession(event.sessionID, log)
+      }
+    }
     setModel({ modelID: event.model?.id, providerID: event.model?.providerID }, log)
     if (shared.currentStatus !== "thinking") {
       shared.currentStatus = "thinking"
