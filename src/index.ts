@@ -45,10 +45,25 @@ function formatModelName(modelId: string | undefined): string {
 }
 
 function createLogger(client: PluginInput["client"]): Logger {
+  const appLog = (client as { app?: { log?: unknown } } | undefined)?.app?.log;
+  const canLogRemotely = typeof appLog === "function";
+
   return (message, level = "info") => {
-    void client.app.log({ body: { service: "discord-rpc", level, message } }).catch(() => {
-      console.log(`[discord-rpc] [${level}] ${message}`);
-    });
+    if (canLogRemotely) {
+      try {
+        void Promise.resolve(
+          (appLog as (input: unknown) => unknown).call((client as { app: unknown }).app, {
+            body: { service: "discord-rpc", level, message },
+          }),
+        ).catch(() => {
+          console.log(`[discord-rpc] [${level}] ${message}`);
+        });
+        return;
+      } catch {
+        // Fall through to console logging.
+      }
+    }
+    console.log(`[discord-rpc] [${level}] ${message}`);
   };
 }
 
