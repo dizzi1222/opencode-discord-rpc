@@ -234,6 +234,11 @@ type V2Event = { type: string; properties?: unknown; data?: unknown }
 interface V2Context {
   app: PluginInput["client"]["app"]
   session: {
+    get: (input: { sessionID: string }) => Promise<{
+      id: string
+      title?: string
+      directory?: string
+    }>
     hook: (
       name: "context",
       callback: (event: {
@@ -288,9 +293,20 @@ async function setupDiscordV2(ctx: V2Context): Promise<(() => void) | undefined>
       const data = eventData(event)
       switch (event.type) {
         case "session.created":
-        case "session.updated":
-          updateSessionInfo(data, config, log)
+        case "session.updated": {
+          const sessionID = typeof data.sessionID === "string" ? data.sessionID : undefined
+          if (sessionID) {
+            try {
+              const info = await ctx.session.get({ sessionID })
+              updateSessionInfo({ info }, config, log)
+            } catch {
+              ensureSession(sessionID, log)
+            }
+          } else {
+            updateSessionInfo(data, config, log)
+          }
           break
+        }
         case "session.status": {
           const status = data.status && typeof data.status === "object"
             ? data.status as Record<string, unknown>
