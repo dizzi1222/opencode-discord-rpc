@@ -227,4 +227,106 @@ export const DiscordRPCPlugin: Plugin = async (ctx) => {
   return hooks;
 };
 
-export default DiscordRPCPlugin;
+// ─── OpenCode V2 adapter ──────────────────────────────────────────────────────
+
+type V2Event = { type: string; properties?: unknown; data?: unknown }
+
+interface V2Context {
+  app: PluginInput["client"]["app"]
+  session: {
+    hook: (
+      name: "context",
+      callback: (event: {
+        sessionID: string
+        model: { providerID: string; id: string }
+      }) => void | Promise<void>
+    ) => Promise<unknown>
+  }
+  tool: {
+    hook: (
+      name: "execute.before" | "execute.after",
+      callback: () => void | Promise<void>
+    ) => Promise<unknown>
+  }
+  event: {
+    subscribe: (options: { signal: AbortSignal }) => AsyncIterable<V2Event>
+  }
+}
+
+async function setupDiscordV2(ctx: V2Context): Promise<(() => void) | undefined> {
+  const config = getConfig()
+  if (!config.enabled) {
+    console.log("[discord-rpc] Plugin disabled via configuration")
+    return
+  }
+
+  const log = createLogger({ app: ctx.app } as PluginInput["client"])
+  ensureConnected(log)
+
+  await ctx.session.hook("context", (event) => {
+    setModel({ modelID: event.model?.id, providerID: event.model?.providerID }, log)
+    if (shared.currentStatus !== "thinking") {
+      shared.currentStatus = "thinking"
+      markActivity()
+    }
+  })
+
+  await ctx.tool.hook("execute.before", () => {
+    shared.currentStatus = "coding"
+    markActivity()
+  })
+
+  await ctx.tool.hook("execute.after", () => {
+    shared.currentStatus = "thinking"
+    markActivity()
+  })
+
+  const controller = new AbortController()
+  void (async () => {
+    for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+      if (!shared.rpcClient) continue
+      const data = eventData(event)
+      switch (event.type) {
+        case "session.created":
+        case "session.updated":
+          updateSessionInfo(data, config, log)
+          break
+        case "session.status": {
+          const status = data.status && typeof data.status === "object"
+            ? data.status as Record<string, unknown>
+            : data
+          if (status.type === "busy") {
+            shared.currentStatus = "coding"
+            markActivity()
+          } else if (status.type === "idle") {
+            shared.currentStatus = "waiting"
+            yieldToOtherRpc()
+          }
+          break
+        }
+        case "session.idle":
+          shared.currentStatus = "idle"
+          yieldToOtherRpc()
+          break
+        case "session.deleted":
+          resetSession()
+          break
+        case "message.part.updated":
+          shared.currentStatus = "thinking"
+          markActivity()
+          break
+      }
+    }
+  })().catch((error) => {
+    log(`Event subscription ended: ${error instanceof Error ? error.message : String(error)}`, "debug")
+  })
+
+  return () => controller.abort()
+}
+
+// V1 (1.18.29+) calls server(); V2 calls setup().
+export default {
+  id: "opencode-discord-rpc",
+  server: DiscordRPCPlugin,
+  setup: setupDiscordV2,
+}

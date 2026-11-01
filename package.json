@@ -1,7 +1,7 @@
 {
   "name": "opencode-discord-rpc",
-  "version": "1.0.1",
-  "description": "Discord Rich Presence plugin for OpenCode - Show your coding activity in Discord",
+  "version": "1.0.2",
+  "description": "Discord Rich Presence plugin for OpenCode V2 - Show your coding activity in Discord",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
